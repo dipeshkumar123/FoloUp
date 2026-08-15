@@ -55,9 +55,11 @@ import { cn } from "@/components/enhanced/shared/cn";
 import {
   SAMPLE_INTERVIEW,
   computeMockDashboard,
+  computeMockDashboardFromResponses,
   getMockResponses,
 } from "@/components/enhanced/shared/mockData";
 import type { Response } from "@/types/response";
+import type { Interview } from "@/types/interview";
 
 type MockResponse = Response & {
   face_presence_pct: number;
@@ -92,9 +94,28 @@ function timeAgo(date: Date | string) {
   return d.toLocaleDateString();
 }
 
-export function FeedbackDashboard() {
-  const [responses] = useState<MockResponse[]>(() => getMockResponses());
-  const metrics = useMemo(() => computeMockDashboard(), []);
+export function FeedbackDashboard({
+  responses: responsesProp,
+  interview: interviewProp,
+}: {
+  /**
+   * Real responses to render. When omitted (e.g. on the /demo page) the
+   * dashboard falls back to the bundled mock data so the UI is fully
+   * explorable without a backend.
+   */
+  responses?: MockResponse[];
+  /** Optional interview to surface in the header strip. */
+  interview?: Partial<Interview>;
+} = {}) {
+  // Real data takes priority; otherwise the demo seed.
+  const [fallbackResponses] = useState<MockResponse[]>(() => getMockResponses());
+  const responses = (responsesProp ?? fallbackResponses) as MockResponse[];
+  const interview = (interviewProp ?? SAMPLE_INTERVIEW) as Interview;
+
+  const metrics = useMemo(
+    () => computeMockDashboardFromResponses(responses as unknown as Record<string, unknown>[]),
+    [responses],
+  );
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("score");
@@ -169,6 +190,7 @@ export function FeedbackDashboard() {
         metrics={metrics}
         unviewedCount={metrics.unviewedCount}
         integrityCount={metrics.integrityFlags}
+        interview={interview}
       />
 
       <div className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
@@ -331,10 +353,12 @@ function DashboardHeader({
   metrics,
   unviewedCount,
   integrityCount,
+  interview,
 }: {
   metrics: ReturnType<typeof computeMockDashboard>;
   unviewedCount: number;
   integrityCount: number;
+  interview: Interview;
 }) {
   return (
     <header className="border-b border-slate-200 bg-white">
@@ -343,15 +367,14 @@ function DashboardHeader({
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <span>Interviews</span>
             <ChevronRight className="h-3 w-3" />
-            <span className="font-medium text-slate-700">{SAMPLE_INTERVIEW.name}</span>
+            <span className="font-medium text-slate-700">{interview.name}</span>
           </div>
           <h1 className="mt-1 text-xl font-bold text-slate-900">
             Candidate feedback
           </h1>
           <p className="mt-0.5 text-xs text-slate-500">
             {metrics.totalResponses} responses · avg interview{" "}
-            {Math.round(metrics.avgDurationSeconds / 60)}m · interviewer{" "}
-            <span className="font-medium text-slate-700">Explorer Lisa</span>
+            {Math.round(metrics.avgDurationSeconds / 60)}m
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

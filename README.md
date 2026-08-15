@@ -63,11 +63,13 @@ Supabase is used for storing the data. It's really simple to set up and the free
 
 1. Create a project (Note down your project's password)
 2. Got to SQL Editor and copy the SQL code from `supabase_schema.sql`
-
-<img src="https://github.com/user-attachments/assets/a31c14b8-45ca-417c-8927-aceb36fa5990" alt="Supabase SQL Editor" height="200">
-
-3. Run the SQL code to confirm the tables are created.
-4. Copy the supabase url and anon key from the project settings and paste it in the `.env` file in `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+3. Run the SQL code to confirm the tables are created (the file now includes the
+   `integrity_signals`, `face_presence_pct`, `video_url`, and `video_storage_path`
+   columns used by the enhanced suite).
+4. Create a public Storage bucket named `interview-videos` (see the bottom of
+   `supabase_schema.sql` for the one-liner) — this is where the candidate video
+   recordings land.
+5. Copy the supabase url and anon key from the project settings and paste it in the `.env` file in `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
 ## Retell AI Setup ([Retell AI](https://retellai.com/))
 
@@ -75,12 +77,31 @@ We use Retell AI to manage all the voice calls. They manage storage of recording
 
 1. Create an API key from [Retell AI Dashboard](https://dashboard.retellai.com/apiKey) and add it to the `.env` file in `RETELL_API_KEY`
 
-## Add OpenAI API Key
+## LLM Setup (Groq by default, OpenAI as fallback)
 
-We use OpenAI to generate questions for interviews and analyze responses. This would not be that costly.
+We use a single LLM client (`src/lib/llm.ts`) to call whichever provider you
+configure. **Groq is the default** — it's OpenAI-API-compatible, much faster,
+and has a generous free tier. The same Node `openai` SDK is used; the client
+just points at `https://api.groq.com/openai/v1` when Groq is selected.
 
-1. Go to [OpenAI](https://platform.openai.com/api-keys) and create an API key
-2. Add the API key to the `.env` file in `OPENAI_API_KEY`
+1. **Groq (recommended)**
+   - Create a free API key at [console.groq.com/keys](https://console.groq.com/keys).
+   - Add it to `.env` as `GROQ_API_KEY=...`
+   - Done. The client will use Llama 3.3 70B by default.
+
+2. **OpenAI (fallback)**
+   - Create an API key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
+   - Add it to `.env` as `OPENAI_API_KEY=...`
+   - Optionally set `LLM_BACKEND=openai` to force OpenAI even when a Groq key is present.
+
+3. **Override the model**
+   - Set `LLM_MODEL=llama-3.1-8b-instant` (Groq) or `LLM_MODEL=gpt-4o-mini` (OpenAI)
+     in `.env` to use a different model.
+
+4. **Health check**
+   - Hit `http://localhost:3000/api/llm-health` to confirm the LLM is reachable
+     and see which backend + model is active. Returns 200 on success, 503 on
+     failure with the underlying error.
 
 ## Getting Started locally
 
@@ -98,6 +119,21 @@ yarn dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Enhanced suite
+
+This branch ships four new UIs that slot into the existing app — no separate
+demo mode, all of them render against your real data:
+
+| # | Feature | Where to look |
+|---|---------|---------------|
+| 1 | **Create AI Interview** — 4-step wizard with template gallery, persona stats, live candidate preview, auto-saved drafts | `src/components/enhanced/create-interview/CreateInterviewWizard.tsx`, mounted in `src/components/dashboard/interview/createInterviewCard.tsx` |
+| 2 | **Candidate Feedback Dashboard** — single-screen overview with KPIs, score histogram, sentiment + status bars, tabbed deep-dive | `src/components/enhanced/feedback-dashboard/FeedbackDashboard.tsx`, mounted in `src/app/(client)/interviews/[interviewId]/page.tsx` |
+| 3 | **Anti-Cheat Suite** — 8 signal types (tab, blur, fullscreen exit, copy/paste, right-click, devtools, text selection, face-presence) | `src/components/enhanced/anti-cheat/*`, wired into `src/components/call/index.tsx` |
+| 4 | **AI Video Interview** — parallel MediaRecorder track alongside the Retell audio call | `src/components/enhanced/video-interview/VideoInterviewLayer.tsx`, wired into the call page; uploads to Supabase Storage bucket `interview-videos` |
+
+A self-contained `/demo` route group is also kept (so reviewers can click
+through without any backend) at `src/app/demo/`.
+
 ## Self Hosting
 
 We recommend using [Vercel](https://vercel.com/) to host the app.
@@ -110,7 +146,7 @@ For a detailed guide on contributing, read the [CONTRIBUTING.md](CONTRIBUTING.md
 
 ## Show Your Support 🌟
 
-If you find FoloUp helpful, please consider giving us a star on GitHub! It helps us reach more developers and continue improving the project.
+If you find FoloUp helpful, please consider giving us a star! It helps us reach more developers and continue improving the project.
 
 ## Products built on top of FoloUp 🚀
 
@@ -125,7 +161,7 @@ If you find FoloUp helpful, please consider giving us a star on GitHub! It helps
   </a>
   <a href="https://techifysolutions.com/blog/interview-screening-with-ai/" target="_blank" style="text-align: center; text-decoration: none;">
   <img src="https://media.licdn.com/dms/image/v2/C4E0BAQFMfuKEtkDeGA/company-logo_200_200/company-logo_200_200/0/1633590742751/techify_solutions_pvt_ltd_logo?e=1764201600&v=beta&t=A6S_wFET56L1j037GOnEUaitHZQD032ybOY0-Cm4l5Q" alt="Techify Logo" height="100" style="border-radius: 20%;">
-  <p>Techify Solutions</p>
+    <p>Techify Solutions</p>
   </a>
 </div>
 

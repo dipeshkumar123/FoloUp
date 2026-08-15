@@ -1,3 +1,17 @@
+export interface AntiCheatSignal {
+  type:
+    | "tab_switch"
+    | "window_blur"
+    | "fullscreen_exit"
+    | "copy_paste_attempt"
+    | "right_click"
+    | "devtools_open"
+    | "text_selected"
+    | "face_absent";
+  timestamp: number;
+  detail?: string;
+}
+
 export interface Response {
   id: bigint;
   created_at: Date;
@@ -13,6 +27,11 @@ export interface Response {
   analytics: any;
   candidate_status: string;
   tab_switch_count: number;
+  /** Optional enhanced-suite fields — backfilled by the new components. */
+  integrity_signals?: AntiCheatSignal[];
+  face_presence_pct?: number;
+  video_url?: string;
+  video_storage_path?: string;
 }
 
 export interface Analytics {

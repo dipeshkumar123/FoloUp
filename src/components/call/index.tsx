@@ -17,6 +17,8 @@ import { isLightColor, testEmail } from "@/lib/utils";
 import { FeedbackService } from "@/services/feedback.service";
 import { InterviewerService } from "@/services/interviewers.service";
 import { ResponseService } from "@/services/responses.service";
+import { StorageService } from "@/services/storage.service";
+import { logger } from "@/lib/logger";
 import type { Interview } from "@/types/interview";
 import type { FeedbackData } from "@/types/response";
 import axios from "axios";
@@ -28,7 +30,14 @@ import { toast } from "sonner";
 import MiniLoader from "../loaders/mini-loader/miniLoader";
 import { Button } from "../ui/button";
 import { Card, CardHeader, CardTitle } from "../ui/card";
-import { TabSwitchWarning, useTabSwitchPrevention } from "./tabSwitchPrevention";
+import { TabSwitchWarning } from "./tabSwitchPrevention";
+import { useAntiCheat } from "@/components/enhanced/anti-cheat/useAntiCheat";
+import { FacePresenceCamera } from "@/components/enhanced/anti-cheat/FacePresenceCamera";
+import { AntiCheatMonitor } from "@/components/enhanced/anti-cheat/AntiCheatMonitor";
+import {
+  VideoInterviewLayer,
+  type VideoInterviewLayerHandle,
+} from "@/components/enhanced/video-interview/VideoInterviewLayer";
 
 const webClient = new RetellWebClient();
 
@@ -64,7 +73,15 @@ function Call({ interview }: InterviewProps) {
   const [isValidEmail, setIsValidEmail] = useState<boolean>(false);
   const [isOldUser, setIsOldUser] = useState<boolean>(false);
   const [callId, setCallId] = useState<string>("");
-  const { tabSwitchCount } = useTabSwitchPrevention();
+  // Enhanced anti-cheat: tracks 8 signal types (tab, blur, fullscreen exit,
+  // copy/paste, right-click, devtools, text selection, face-presence).
+  const antiCheat = useAntiCheat({
+    enabled: isCalling,
+    enforceFullscreen: true,
+    enableFacePresence: true,
+  });
+  const videoHandleRef = useRef<VideoInterviewLayerHandle | null>(null);
+  const [videoEnabled, setVideoEnabled] = useState<boolean>(true);
   const [isFeedbackSubmitted, setIsFeedbackSubmitted] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [interviewerImg, setInterviewerImg] = useState("");
@@ -251,14 +268,58 @@ function Call({ interview }: InterviewProps) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
   useEffect(() => {
     if (isEnded) {
-      const updateInterview = async () => {
-        await ResponseService.saveResponse(
-          { is_ended: true, tab_switch_count: tabSwitchCount },
-          callId,
-        );
+      const persistCallEnd = async () => {
+        // 1) Stop the video recorder and grab the blob
+        let videoBlob: Blob | null = null;
+        try {
+          const result = await videoHandleRef.current?.stop();
+          if (result) videoBlob = result.blob;
+        } catch (err) {
+          logger.error("Video stop failed: " + String(err));
+        }
+
+        // 2) Upload the video to Supabase Storage (best-effort)
+        let videoUrl: string | undefined;
+        let videoPath: string | undefined;
+        if (videoBlob && callId) {
+          try {
+            const upload = await StorageService.uploadInterviewVideo(
+              videoBlob,
+              callId,
+            );
+            videoUrl = upload.publicUrl;
+            videoPath = upload.storagePath;
+            logger.info(`Video uploaded: ${upload.publicUrl} (${upload.sizeBytes} bytes)`);
+          } catch (err) {
+            // Non-fatal — the call still completes without the recording.
+            logger.error("Video upload failed: " + String(err));
+            toast.error("Couldn't upload the video recording", {
+              description: "The interview results are still saved — only the recording is missing.",
+            });
+          }
+        }
+
+        // 3) Persist integrity signals + face presence + (optional) video URL
+        try {
+          await ResponseService.saveIntegrity(
+            {
+              integrity_signals: antiCheat.signals,
+              face_presence_pct: antiCheat.facePresencePct,
+            },
+            callId,
+          );
+          if (videoUrl && videoPath) {
+            await ResponseService.saveVideoUrl(
+              { video_url: videoUrl, video_storage_path: videoPath },
+              callId,
+            );
+          }
+        } catch (err) {
+          logger.error("Failed to save call-end payload: " + String(err));
+        }
       };
 
-      updateInterview();
+      persistCallEnd();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEnded]);
@@ -267,6 +328,36 @@ function Call({ interview }: InterviewProps) {
     <div className="flex justify-center items-center min-h-screen bg-gray-100">
       {isStarted && <TabSwitchWarning />}
       <div className="bg-white rounded-md md:w-[80%] w-[90%]">
+        {/* Enhanced anti-cheat + video layer — active only during the call */}
+        {isStarted && !isEnded && !isOldUser && (
+          <div className="absolute right-4 top-4 z-30 w-72 space-y-2">
+            {videoEnabled && (
+              <div className="h-40">
+                <VideoInterviewLayer
+                  active
+                  handleRef={videoHandleRef}
+                  compact
+                  className="h-full"
+                />
+              </div>
+            )}
+            <AntiCheatMonitor state={antiCheat} showLog={false} />
+            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px]">
+              <span className="text-slate-600">Camera</span>
+              <button
+                type="button"
+                onClick={() => setVideoEnabled((v) => !v)}
+                className={`rounded-full px-2 py-0.5 font-medium ${
+                  videoEnabled
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-slate-200 text-slate-600"
+                }`}
+              >
+                {videoEnabled ? "On" : "Off"}
+              </button>
+            </div>
+          </div>
+        )}
         <Card className="h-[88vh] rounded-lg border-2 border-b-4 border-r-4 border-black text-xl font-bold transition-all  md:block dark:border-white ">
           <div>
             <div className="m-4 h-[15px] rounded-lg border-[1px]  border-black">
