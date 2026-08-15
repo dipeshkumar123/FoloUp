@@ -12,13 +12,11 @@ import { toast } from "sonner";
 
 interface Props {
   name: string | null;
-  interviewerId: bigint;
+  interviewerId: bigint | null;
   id: string;
   url: string;
   readableSlug: string;
 }
-
-const base_url = process.env.NEXT_PUBLIC_LIVE_URL;
 
 function InterviewCard({ name, interviewerId, id, url, readableSlug }: Props) {
   const [copied, setCopied] = useState(false);
@@ -29,8 +27,13 @@ function InterviewCard({ name, interviewerId, id, url, readableSlug }: Props) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
   useEffect(() => {
     const fetchInterviewer = async () => {
-      const interviewer = await InterviewerService.getInterviewer(interviewerId);
-      setImg(interviewer.image);
+      try {
+        if (interviewerId === null || interviewerId === undefined) return;
+        const interviewer = await InterviewerService.getInterviewer(interviewerId);
+        setImg(interviewer?.image || "");
+      } catch (error) {
+        console.error("Failed to load interviewer", error);
+      }
     };
     fetchInterviewer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -74,8 +77,11 @@ function InterviewCard({ name, interviewerId, id, url, readableSlug }: Props) {
   }, []);
 
   const copyToClipboard = () => {
+    const interviewUrl = readableSlug
+      ? `${window.location.origin}/call/${readableSlug}`
+      : url;
     navigator.clipboard
-      .writeText(readableSlug ? `${base_url}/call/${readableSlug}` : (url as string))
+      .writeText(interviewUrl)
       .then(
         () => {
           setCopied(true);
@@ -122,13 +128,17 @@ function InterviewCard({ name, interviewerId, id, url, readableSlug }: Props) {
           </div>
           <div className="flex flex-row items-center mx-4 ">
             <div className="w-full overflow-hidden">
-              <Image
-                src={img}
-                alt="Picture of the interviewer"
-                width={70}
-                height={70}
-                className="object-cover object-center"
-              />
+              {img ? (
+                <Image
+                  src={img}
+                  alt="Picture of the interviewer"
+                  width={70}
+                  height={70}
+                  className="object-cover object-center"
+                />
+              ) : (
+                <div className="h-[70px] w-[70px] rounded-full bg-indigo-100" aria-hidden="true" />
+              )}
             </div>
             <div className="text-black text-sm font-semibold mt-2 mr-2 whitespace-nowrap">
               Responses: <span className="font-normal">{responseCount?.toString() || 0}</span>

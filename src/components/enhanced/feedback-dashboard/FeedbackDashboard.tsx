@@ -141,7 +141,7 @@ export function FeedbackDashboard({
     }
     if (showIntegrityOnly) {
       list = list.filter(
-        (r) => r.tab_switch_count >= 3 || r.face_presence_pct < 80,
+        (r) => hasIntegrityFlag(r),
       );
     }
     if (showUnviewedOnly) {
@@ -567,8 +567,7 @@ function CandidateRow({
   active: boolean;
   onClick: () => void;
 }) {
-  const integrityFlag =
-    response.tab_switch_count >= 3 || response.face_presence_pct < 80;
+  const integrityFlag = hasIntegrityFlag(response);
   return (
     <button
       type="button"
@@ -608,8 +607,7 @@ function CandidateRow({
 // ---------------------------------------------------------------------------
 function CandidateDetail({ response }: { response: MockResponse }) {
   const [tab, setTab] = useState<"summary" | "transcript" | "integrity">("summary");
-  const integrityFlag =
-    response.tab_switch_count >= 3 || response.face_presence_pct < 80;
+  const integrityFlag = hasIntegrityFlag(response);
 
   return (
     <Card className="space-y-4">
@@ -706,7 +704,7 @@ function SummaryTab({ response }: { response: MockResponse }) {
           {analytics?.communication?.feedback ?? "—"}
         </p>
       </div>
-      {response.has_video && (
+      {(response.has_video || response.video_url) && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
           <div className="mb-2 flex items-center justify-between">
             <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -716,7 +714,15 @@ function SummaryTab({ response }: { response: MockResponse }) {
               Available
             </span>
           </div>
-          <div className="flex aspect-video items-center justify-center rounded-lg bg-gradient-to-br from-slate-800 to-slate-900 text-slate-300">
+          {response.video_url && (
+            <video
+              controls
+              preload="metadata"
+              src={response.video_url}
+              className="aspect-video w-full rounded-lg bg-slate-900"
+            />
+          )}
+          <div className={response.video_url ? "hidden" : "flex aspect-video items-center justify-center rounded-lg bg-gradient-to-br from-slate-800 to-slate-900 text-slate-300"}>
             <div className="text-center">
               <Video className="mx-auto h-8 w-8 text-slate-400" />
               <p className="mt-2 text-[10px]">
@@ -843,6 +849,14 @@ function IntegrityTab({ response }: { response: MockResponse }) {
         before making a hiring decision.
       </p>
     </div>
+  );
+}
+
+function hasIntegrityFlag(response: MockResponse) {
+  return (
+    response.tab_switch_count >= 3 ||
+    response.face_presence_pct < 80 ||
+    (response.integrity_signals?.length ?? 0) > 0
   );
 }
 

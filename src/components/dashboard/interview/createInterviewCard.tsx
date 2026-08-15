@@ -21,7 +21,7 @@ import { useState } from "react";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Plus, Sparkles } from "lucide-react";
 import { useInterviews } from "@/contexts/interviews.context";
-import { useOrganization } from "@clerk/nextjs";
+import { useClerk, useOrganization } from "@clerk/nextjs";
 import axios from "axios";
 import {
   CreateInterviewWizard,
@@ -32,6 +32,7 @@ function CreateInterviewCard() {
   const [open, setOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const { fetchInterviews } = useInterviews();
+  const { user } = useClerk();
   const { organization } = useOrganization();
 
   const handlePublish = async (result: WizardResult) => {
@@ -39,21 +40,28 @@ function CreateInterviewCard() {
     try {
       // Mirror the original payload shape so the existing
       // /api/create-interview route works without changes.
+      const { interviewerId, ...resultData } = result;
       const sanitized = {
-        ...result,
-        // bigint-ish values are serialised as strings over JSON
-        interviewer_id: result.interviewerId.toString(),
+        ...resultData,
+        // BigInt values cannot be sent in a JSON request. Keep only the
+        // database field, converted to a regular number.
+        interviewer_id: Number(interviewerId),
         logo_url: organization?.imageUrl || "",
+        organization_id: organization?.id || null,
+        user_id: user?.id || null,
+        shareUrl: result.shareUrl,
       };
       await axios.post("/api/create-interview", {
         organizationName: organization?.name,
+        organizationId: organization?.id,
+        userId: user?.id,
         interviewData: sanitized,
       });
       await fetchInterviews();
       setOpen(false);
     } catch (err) {
-      // The wizard already surfaces errors via the publish button state.
       console.error("Create interview failed", err);
+      throw err;
     } finally {
       setPublishing(false);
     }

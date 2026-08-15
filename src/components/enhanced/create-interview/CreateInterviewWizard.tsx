@@ -58,6 +58,7 @@ import type { Question } from "@/types/interview";
 const STORAGE_KEY = "foloup.enhanced.createInterview.draft.v1";
 
 export interface WizardResult {
+  id: string;
   name: string;
   objective: string;
   description: string;
@@ -128,7 +129,7 @@ export function CreateInterviewWizard({
 }: {
   open: boolean;
   onClose: () => void;
-  onPublish?: (result: WizardResult) => void;
+  onPublish?: (result: WizardResult) => void | Promise<void>;
 }) {
   const [step, setStep] = useState(0);
   const [state, setState] = useState<WizardState>(() => blankState());
@@ -214,29 +215,36 @@ export function CreateInterviewWizard({
 
   const handlePublish = async () => {
     setPublishing(true);
-    await new Promise((r) => setTimeout(r, 900));
-    const slug =
-      state.name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "")
-        .slice(0, 32) || "interview";
-    const id = Math.random().toString(36).slice(2, 8);
-    const url = `https://demo.folo-up.co/call/${slug}-${id}`;
-    setPublishedUrl(url);
-    setPublishing(false);
-    onPublish?.({
-      name: state.name,
-      objective: state.objective,
-      description: state.description,
-      questionCount: state.questionCount,
-      timeDuration: state.timeDuration,
-      isAnonymous: state.isAnonymous,
-      interviewerId: state.interviewerId ?? BigInt(1),
-      questions: state.questions,
-      shareUrl: url,
-      readTimeSeconds: state.questions.length * 12,
-    });
+    try {
+      await new Promise((r) => setTimeout(r, 900));
+      const slug =
+        state.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "")
+          .slice(0, 32) || "interview";
+      const id = Math.random().toString(36).slice(2, 8);
+      const baseUrl = typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
+      const url = `${baseUrl.replace(/\/$/, "")}/call/${slug}-${id}`;
+      await onPublish?.({
+        id,
+        name: state.name,
+        objective: state.objective,
+        description: state.description,
+        questionCount: state.questionCount,
+        timeDuration: state.timeDuration,
+        isAnonymous: state.isAnonymous,
+        interviewerId: state.interviewerId ?? BigInt(1),
+        questions: state.questions,
+        shareUrl: url,
+        readTimeSeconds: state.questions.length * 12,
+      });
+      setPublishedUrl(url);
+    } catch (error) {
+      console.error("Failed to publish interview", error);
+    } finally {
+      setPublishing(false);
+    }
   };
 
   if (!open) return null;

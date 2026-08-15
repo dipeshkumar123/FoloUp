@@ -14,13 +14,23 @@ const normalizeInterviewPayload = (payload: any) => {
   return payload;
 };
 
-const getAllInterviews = async (userId: string, organizationId: string) => {
+const getAllInterviews = async (userId?: string, organizationId?: string) => {
   try {
-    const { data: clientData, error: clientError } = await supabase
-      .from("interview")
-      .select("*")
-      .or(`organization_id.eq.${organizationId},user_id.eq.${userId}`)
-      .order("created_at", { ascending: false });
+    let query = supabase.from("interview").select("*");
+
+    if (organizationId && userId) {
+      query = query.or(`organization_id.eq.${organizationId},user_id.eq.${userId}`);
+    } else if (organizationId) {
+      query = query.eq("organization_id", organizationId);
+    } else if (userId) {
+      query = query.eq("user_id", userId);
+    } else {
+      query = query.limit(0);
+    }
+
+    const { data: clientData, error: clientError } = await query.order("created_at", {
+      ascending: false,
+    });
 
     return [...(clientData || [])];
   } catch (error) {
@@ -32,16 +42,22 @@ const getAllInterviews = async (userId: string, organizationId: string) => {
 
 const getInterviewById = async (id: string) => {
   try {
+    const normalizedId = id.replace(/^.*\/call\//, "").replace(/\/$/, "");
     const { data, error } = await supabase
       .from("interview")
       .select("*")
-      .or(`id.eq.${id},readable_slug.eq.${id}`);
+      .or(`id.eq.${normalizedId},readable_slug.eq.${normalizedId}`);
 
-    return data ? data[0] : null;
+    if (error) {
+      console.log(error);
+      return null;
+    }
+
+    return data && data.length > 0 ? data[0] : null;
   } catch (error) {
     console.log(error);
 
-    return [];
+    return null;
   }
 };
 
@@ -91,8 +107,7 @@ const createInterview = async (payload: any) => {
   const { error, data } = await supabase.from("interview").insert({ ...normalizedPayload });
   if (error) {
     console.log(error);
-
-    return [];
+    throw new Error(error.message);
   }
 
   return data;

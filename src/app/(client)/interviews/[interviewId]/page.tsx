@@ -48,8 +48,6 @@ interface Props {
   }>;
 }
 
-const base_url = process.env.NEXT_PUBLIC_LIVE_URL;
-
 function InterviewHome({ params, searchParams }: Props) {
   const resolvedParams = use(params);
   const resolvedSearchParams = use(searchParams);
@@ -68,10 +66,9 @@ function InterviewHome({ params, searchParams }: Props) {
   const { organization } = useOrganization();
 
   const seeInterviewPreviewPage = () => {
-    const protocol = base_url?.includes("localhost") ? "http" : "https";
     if (interview?.url) {
       const url = interview?.readable_slug
-        ? `${protocol}://${base_url}/call/${interview?.readable_slug}`
+        ? `${window.location.origin}/call/${interview.readable_slug}`
         : interview.url.startsWith("http")
           ? interview.url
           : `https://${interview.url}`;
@@ -327,7 +324,7 @@ function InterviewHome({ params, searchParams }: Props) {
           onClose={closeSharePopup}
           shareContent={
             interview?.readable_slug
-              ? `${base_url}/call/${interview?.readable_slug}`
+              ? `${window.location.origin}/call/${interview.readable_slug}`
               : (interview?.url as string)
           }
         />

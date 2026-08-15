@@ -155,6 +155,9 @@ export function VideoInterviewLayer({
     })();
     return () => {
       cancelled = true;
+      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
     };
   }, [active, onRecordingComplete]);
 

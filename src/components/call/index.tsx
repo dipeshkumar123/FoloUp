@@ -84,7 +84,7 @@ function Call({ interview }: InterviewProps) {
   const [videoEnabled, setVideoEnabled] = useState<boolean>(true);
   const [isFeedbackSubmitted, setIsFeedbackSubmitted] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [interviewerImg, setInterviewerImg] = useState("");
+  const [interviewerImg, setInterviewerImg] = useState("/interviewers/Lisa.png");
   const [interviewTimeDuration, setInterviewTimeDuration] = useState<string>("1");
   const [time, setTime] = useState(0);
   const [currentTimeDuration, setCurrentTimeDuration] = useState<string>("0");
@@ -211,12 +211,30 @@ function Call({ interview }: InterviewProps) {
     };
     setLoading(true);
 
-    const oldUserEmails: string[] = (await ResponseService.getAllEmails(interview.id)).map(
-      (item) => item.email,
+    // This call runs directly from the Start button's user gesture, which is
+    // required by browsers before they allow fullscreen mode.
+    if (!document.fullscreenElement) {
+      try {
+        await document.documentElement.requestFullscreen();
+      } catch {
+        toast.error("Fullscreen is required to start this interview.");
+        setLoading(false);
+        return;
+      }
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const oldUserEmails = (await ResponseService.getAllEmails(interview.id)).map((item) =>
+      String(item.email || "").trim().toLowerCase(),
     );
+    const allowedRespondents = (interview.respondents || []).map((respondent) =>
+      String(respondent).trim().toLowerCase(),
+    );
+    // An empty respondents list means the interview is open to everyone.
+    // It is not an allow-list that excludes every candidate.
     const OldUser =
-      oldUserEmails.includes(email) ||
-      (interview?.respondents && !interview?.respondents.includes(email));
+      oldUserEmails.includes(normalizedEmail) ||
+      (allowedRespondents.length > 0 && !allowedRespondents.includes(normalizedEmail));
 
     if (OldUser) {
       setIsOldUser(true);
@@ -258,8 +276,9 @@ function Call({ interview }: InterviewProps) {
 
   useEffect(() => {
     const fetchInterviewer = async () => {
+      if (interview.interviewer_id === null || interview.interviewer_id === undefined) return;
       const interviewer = await InterviewerService.getInterviewer(interview.interviewer_id);
-      setInterviewerImg(interviewer.image);
+      if (interviewer?.image) setInterviewerImg(interviewer.image);
     };
     fetchInterviewer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -292,7 +311,7 @@ function Call({ interview }: InterviewProps) {
             logger.info(`Video uploaded: ${upload.publicUrl} (${upload.sizeBytes} bytes)`);
           } catch (err) {
             // Non-fatal — the call still completes without the recording.
-            logger.error("Video upload failed: " + String(err));
+            logger.warn("Video upload failed: " + String(err));
             toast.error("Couldn't upload the video recording", {
               description: "The interview results are still saved — only the recording is missing.",
             });
@@ -301,6 +320,15 @@ function Call({ interview }: InterviewProps) {
 
         // 3) Persist integrity signals + face presence + (optional) video URL
         try {
+          if (!callId) return;
+          await ResponseService.saveResponse(
+            {
+              is_ended: true,
+              duration: Number(currentTimeDuration) || null,
+              tab_switch_count: antiCheat.counts.tab_switch ?? 0,
+            },
+            callId,
+          );
           await ResponseService.saveIntegrity(
             {
               integrity_signals: antiCheat.signals,
@@ -341,6 +369,7 @@ function Call({ interview }: InterviewProps) {
                 />
               </div>
             )}
+            <FacePresenceCamera enabled compact className="hidden" />
             <AntiCheatMonitor state={antiCheat} showLog={false} />
             <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px]">
               <span className="text-slate-600">Camera</span>
@@ -450,7 +479,7 @@ function Call({ interview }: InterviewProps) {
                     {!Loading ? "Start Interview" : <MiniLoader />}
                   </Button>
                   <AlertDialog>
-                    <AlertDialogTrigger>
+                    <AlertDialogTrigger asChild>
                       <Button
                         className="bg-white border ml-2 text-black min-w-15 h-10 rounded-lg flex flex-row justify-center mb-8"
                         style={{ borderColor: interview.theme_color }}
@@ -536,9 +565,9 @@ function Call({ interview }: InterviewProps) {
             {isStarted && !isEnded && !isOldUser && (
               <div className="items-center p-2">
                 <AlertDialog>
-                  <AlertDialogTrigger className="w-full">
+                  <AlertDialogTrigger asChild>
                     <Button
-                      className=" bg-white text-black border  border-indigo-600 h-10 mx-auto flex flex-row justify-center mb-8"
+                      className="w-full bg-white text-black border border-indigo-600 h-10 mx-auto flex flex-row justify-center mb-8"
                       disabled={Loading}
                     >
                       End Interview{" "}
@@ -586,15 +615,16 @@ function Call({ interview }: InterviewProps) {
 
                   {!isFeedbackSubmitted && (
                     <AlertDialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                      <AlertDialogTrigger className="w-full flex justify-center">
+                      <AlertDialogTrigger asChild>
                         <Button
-                          className="bg-indigo-600 text-white h-10 mt-4 mb-4"
+                          className="bg-indigo-600 text-white h-10 mt-4 mb-4 mx-auto flex"
                           onClick={() => setIsDialogOpen(true)}
                         >
                           Provide Feedback
                         </Button>
                       </AlertDialogTrigger>
                       <AlertDialogContent>
+                        <AlertDialogTitle className="sr-only">Provide feedback</AlertDialogTitle>
                         <FeedbackForm email={email} onSubmit={handleFeedbackSubmit} />
                       </AlertDialogContent>
                     </AlertDialog>

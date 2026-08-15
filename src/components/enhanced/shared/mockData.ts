@@ -677,7 +677,8 @@ export function computeMockDashboardFromResponses(
   const integrityFlags = rows.filter((r) => {
     const tabs = num((r as any).tabSwitchCount ?? r.tab_switch_count);
     const face = num((r as any).facePresencePct ?? r.face_presence_pct);
-    return tabs >= 3 || face < 80;
+    const signals = (r as any).integrity_signals;
+    return tabs >= 3 || face < 80 || (Array.isArray(signals) && signals.length > 0);
   }).length;
 
   // Reference the function so eslint doesn't strip the import
