@@ -11,6 +11,12 @@
  *   - Set `OPENAI_API_KEY` (and `LLM_BACKEND=openai`) to fall back to OpenAI
  *   - Set `LLM_MODEL` to override the default model
  *
+ * Robust to model deprecation: if the configured model 404s, the
+ * client walks down a fallback chain (most-capable -> smallest) so
+ * the app keeps working even if Groq retires a model. The first call
+ * after a Groq model retirement triggers the fallback; subsequent
+ * calls use the working model until the process restarts.
+ *
  * The chat-completions interface we expose is a *narrow* subset of
  * the official SDK, just enough for our 4 call sites. We deliberately
  * don't try to wrap the whole SDK — that would be more code to maintain
@@ -66,21 +72,33 @@ function pickBackend(): Backend {
 }
 
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
-const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
+
+// Ordered: most-capable production model first, then progressively smaller.
+// The client tries each in order on 404 "model_not_found" so deprecations
+// don't take the app down between code updates.
+const GROQ_MODEL_FALLBACK_CHAIN = [
+  "openai/gpt-oss-120b",   // current Groq production default
+  "openai/gpt-oss-20b",    // smaller production model
+  "qwen/qwen3.6-27b",      // preview, multimodal
+  "llama-3.1-70b-versatile", // legacy Llama 3.1 (likely also deprecated)
+  "llama-3.1-8b-instant",  // legacy small Llama
+] as const;
+
+const OPENAI_MODEL_FALLBACK_CHAIN = [
+  "gpt-4o",
+  "gpt-4o-mini",
+  "gpt-4-turbo",
+  "gpt-3.5-turbo",
+] as const;
+
 const DEFAULT_OPENAI_MODEL = "gpt-4o";
 
-const KNOWN_GROQ_MODELS = [
-  "llama-3.3-70b-versatile",
-  "llama-3.1-70b-versatile",
-  "llama-3.1-8b-instant",
-  "mixtral-8x7b-32768",
-];
-
 // ---------------------------------------------------------------------------
-// Cached client
+// Cached client + last-known-good model
 // ---------------------------------------------------------------------------
 let _client: OpenAI | null = null;
 let _clientBackend: Backend | null = null;
+let _lastGoodModel: string | null = null;
 
 function getClient(backend: Backend): OpenAI {
   if (_client && _clientBackend === backend) return _client;
@@ -95,73 +113,119 @@ function getClient(backend: Backend): OpenAI {
     _client = new OpenAI({
       apiKey,
       baseURL: GROQ_BASE_URL,
-      maxRetries: 3,
+      maxRetries: 2,
     });
   } else {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       throw new Error("OPENAI_API_KEY is not set and LLM_BACKEND=openai.");
     }
-    _client = new OpenAI({ apiKey, maxRetries: 3 });
+    _client = new OpenAI({ apiKey, maxRetries: 2 });
   }
   _clientBackend = backend;
   return _client;
 }
 
-function pickModel(backend: Backend, override?: string): string {
-  if (override) return override;
-  if (process.env.LLM_MODEL) return process.env.LLM_MODEL;
-  return backend === "groq" ? DEFAULT_GROQ_MODEL : DEFAULT_OPENAI_MODEL;
+/**
+ * Order to try models in. If we've already discovered a working model
+ * for this backend (e.g. via the fallback chain on a previous call),
+ * use it first to avoid the ~500ms penalty of re-probing a deprecated
+ * default.
+ */
+function modelChainFor(backend: Backend, override?: string): string[] {
+  if (override) return [override];
+  const explicit = process.env.LLM_MODEL?.trim();
+  if (explicit) return [explicit];
+
+  const fallback =
+    backend === "openai"
+      ? [DEFAULT_OPENAI_MODEL, ...OPENAI_MODEL_FALLBACK_CHAIN.filter((m) => m !== DEFAULT_OPENAI_MODEL)]
+      : [...GROQ_MODEL_FALLBACK_CHAIN];
+
+  // If we have a last-known-good model for this backend, put it first.
+  if (_lastGoodModel && !fallback.includes(_lastGoodModel as never)) {
+    return [_lastGoodModel, ...fallback];
+  }
+  if (_lastGoodModel && fallback.includes(_lastGoodModel as never)) {
+    return [_lastGoodModel, ...fallback.filter((m) => m !== _lastGoodModel)];
+  }
+  return fallback;
+}
+
+function rememberGoodModel(model: string) {
+  _lastGoodModel = model;
+}
+
+/** True if the error is a Groq/OpenAI 404 (model not found). */
+function isModelNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { status?: number; code?: string };
+  return e.status === 404 || e.code === "model_not_found";
 }
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 /**
- * Send a chat completion. Always returns parsed JSON-friendly text.
- * Throws on transport errors or if both API keys are missing.
+ * Send a chat completion. Tries the configured model first, then walks
+ * the fallback chain on 404. Returns the first successful result.
  */
 export async function chatCompletion(opts: ChatOptions): Promise<ChatResult> {
   const backend = pickBackend();
   const client = getClient(backend);
-  const model = pickModel(backend, opts.model);
+  const chain = modelChainFor(backend, opts.model);
 
-  if (backend === "groq" && !KNOWN_GROQ_MODELS.includes(model)) {
-    logger.warn(
-      `Model ${model} is not in our known Groq list — Groq will reject if the model name is wrong. ` +
-        `Known: ${KNOWN_GROQ_MODELS.join(", ")}`,
-    );
+  let lastError: unknown = null;
+  for (const model of chain) {
+    try {
+      const completion = await client.chat.completions.create({
+        model,
+        messages: opts.messages,
+        temperature: opts.temperature ?? 0.4,
+        max_tokens: opts.maxTokens ?? 2048,
+        // JSON mode. Both Groq and OpenAI accept { type: "json_object" }.
+        ...(opts.responseFormatJson
+          ? { response_format: { type: "json_object" as const } }
+          : {}),
+      });
+
+      const content = completion.choices[0]?.message?.content ?? "";
+      logger.info(`LLM call ok: ${backend}/${model}`);
+      rememberGoodModel(model);
+      return {
+        content,
+        model,
+        backend,
+        usage: completion.usage
+          ? {
+              promptTokens: completion.usage.prompt_tokens,
+              completionTokens: completion.usage.completion_tokens,
+              totalTokens: completion.usage.total_tokens,
+            }
+          : undefined,
+      };
+    } catch (err) {
+      lastError = err;
+      if (isModelNotFoundError(err)) {
+        logger.warn(
+          `LLM model ${backend}/${model} not found (likely deprecated). ` +
+            `Trying the next model in the fallback chain.`,
+        );
+        continue;
+      }
+      // Non-404 — log and surface immediately. No point in trying other
+      // models, the failure is the same (auth, quota, network, etc.).
+      logger.error(`LLM call failed (${backend}/${model}): ${String(err)}`);
+      throw err;
+    }
   }
 
-  try {
-    const completion = await client.chat.completions.create({
-      model,
-      messages: opts.messages,
-      temperature: opts.temperature ?? 0.4,
-      max_tokens: opts.maxTokens ?? 2048,
-      // JSON mode. Both Groq and OpenAI accept { type: "json_object" }.
-      ...(opts.responseFormatJson
-        ? { response_format: { type: "json_object" as const } }
-        : {}),
-    });
-
-    const content = completion.choices[0]?.message?.content ?? "";
-    return {
-      content,
-      model,
-      backend,
-      usage: completion.usage
-        ? {
-            promptTokens: completion.usage.prompt_tokens,
-            completionTokens: completion.usage.completion_tokens,
-            totalTokens: completion.usage.total_tokens,
-          }
-        : undefined,
-    };
-  } catch (err) {
-    logger.error(`LLM call failed (${backend}/${model}): ${String(err)}`);
-    throw err;
-  }
+  // All models in the chain returned 404. Surface the last error.
+  logger.error(
+    `All ${chain.length} models in the ${backend} fallback chain returned 404. ` +
+      `Set LLM_MODEL to a currently-supported model. Last error: ${String(lastError)}`,
+  );
+  throw lastError ?? new Error(`No working model found for backend ${backend}`);
 }
 
 /**
@@ -205,14 +269,13 @@ export async function llmHealthCheck(): Promise<{
     const result = await chatCompletion({
       messages: [{ role: "user", content: "ping" }],
       maxTokens: 8,
-      model: pickModel(backend),
     });
     return { ok: true, backend, model: result.model };
   } catch (err) {
     return {
       ok: false,
       backend,
-      model: pickModel(backend),
+      model: process.env.LLM_MODEL ?? GROQ_MODEL_FALLBACK_CHAIN[0],
       error: err instanceof Error ? err.message : String(err),
     };
   }

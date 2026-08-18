@@ -87,21 +87,27 @@ just points at `https://api.groq.com/openai/v1` when Groq is selected.
 1. **Groq (recommended)**
    - Create a free API key at [console.groq.com/keys](https://console.groq.com/keys).
    - Add it to `.env` as `GROQ_API_KEY=...`
-   - Done. The client will use Llama 3.3 70B by default.
+   - Default model: `openai/gpt-oss-120b` (production).
+   - **Automatic model fallback** — if the default model is unavailable
+     (e.g. Groq retires it), the client walks down the chain
+     `gpt-oss-120b → gpt-oss-20b → qwen3.6-27b → llama-3.1-*` until one
+     succeeds. The first working model is cached for the rest of the
+     process so you don't pay the 404-retry penalty on every call.
 
 2. **OpenAI (fallback)**
    - Create an API key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
    - Add it to `.env` as `OPENAI_API_KEY=...`
-   - Optionally set `LLM_BACKEND=openai` to force OpenAI even when a Groq key is present.
+   - Set `LLM_BACKEND=openai` to force OpenAI even when a Groq key is present.
+   - Fallback chain: `gpt-4o → gpt-4o-mini → gpt-4-turbo → gpt-3.5-turbo`.
 
 3. **Override the model**
-   - Set `LLM_MODEL=llama-3.1-8b-instant` (Groq) or `LLM_MODEL=gpt-4o-mini` (OpenAI)
-     in `.env` to use a different model.
+   - Set `LLM_MODEL=openai/gpt-oss-20b` (Groq) or `LLM_MODEL=gpt-4o-mini`
+     (OpenAI) in `.env` to pin a specific model.
 
 4. **Health check**
-   - Hit `http://localhost:3000/api/llm-health` to confirm the LLM is reachable
-     and see which backend + model is active. Returns 200 on success, 503 on
-     failure with the underlying error.
+   - Hit `http://localhost:3000/api/llm-health` to confirm the LLM is
+     reachable and see which backend + model is active. Returns 200 on
+     success, 503 on failure with the underlying error.
 
 ## Getting Started locally
 
