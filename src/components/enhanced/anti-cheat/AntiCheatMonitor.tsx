@@ -9,20 +9,17 @@
  * that's happening at a glance.
  */
 
+import { cn } from "@/components/enhanced/shared/cn";
 import {
   AlertTriangle,
+  Camera,
   CheckCircle2,
   Eye,
   Maximize2,
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
-import { cn } from "@/components/enhanced/shared/cn";
-import {
-  SIGNAL_LABELS,
-  type AntiCheatSignal,
-  type AntiCheatState,
-} from "./useAntiCheat";
+import { type AntiCheatSignal, type AntiCheatState, SIGNAL_LABELS } from "./useAntiCheat";
 
 const SIGNAL_ICONS: Record<string, React.ReactNode> = {
   tab_switch: <Eye className="h-3 w-3" />,
@@ -33,6 +30,7 @@ const SIGNAL_ICONS: Record<string, React.ReactNode> = {
   devtools_open: <AlertTriangle className="h-3 w-3" />,
   text_selected: <AlertTriangle className="h-3 w-3" />,
   face_absent: <ShieldAlert className="h-3 w-3" />,
+  screenshot_attempt: <Camera className="h-3 w-3" />,
 };
 
 export function AntiCheatMonitor({
@@ -44,14 +42,8 @@ export function AntiCheatMonitor({
   className?: string;
   showLog?: boolean;
 }) {
-  const {
-    signals,
-    isFullscreen,
-    isDevtoolsOpen,
-    isFacePresent,
-    facePresencePct,
-    anySignal,
-  } = state;
+  const { signals, isFullscreen, isDevtoolsOpen, isFacePresent, facePresencePct, anySignal } =
+    state;
 
   const overallTone = !anySignal
     ? "ok"
@@ -81,9 +73,7 @@ export function AntiCheatMonitor({
               )}
             />
           )}
-          <p className="text-xs font-semibold text-slate-900">
-            Integrity monitor
-          </p>
+          <p className="text-xs font-semibold text-slate-900">Integrity monitor</p>
         </div>
         <span
           className={cn(
@@ -102,18 +92,8 @@ export function AntiCheatMonitor({
       </div>
 
       <div className="grid grid-cols-3 gap-2 text-[11px]">
-        <MonitorTile
-          label="Fullscreen"
-          ok={isFullscreen}
-          okText="On"
-          badText="Off"
-        />
-        <MonitorTile
-          label="DevTools"
-          ok={!isDevtoolsOpen}
-          okText="Closed"
-          badText="Open"
-        />
+        <MonitorTile label="Fullscreen" ok={isFullscreen} okText="On" badText="Off" />
+        <MonitorTile label="DevTools" ok={!isDevtoolsOpen} okText="Closed" badText="Open" />
         <MonitorTile
           label="Face"
           ok={isFacePresent}
@@ -159,12 +139,7 @@ function MonitorTile({
         ok ? "border-emerald-200 bg-emerald-50" : "border-rose-200 bg-rose-50",
       )}
     >
-      <p
-        className={cn(
-          "text-[11px] font-semibold",
-          ok ? "text-emerald-700" : "text-rose-700",
-        )}
-      >
+      <p className={cn("text-[11px] font-semibold", ok ? "text-emerald-700" : "text-rose-700")}>
         {ok ? okText : badText}
       </p>
       <p className="text-[10px] text-slate-500">{label}</p>
@@ -180,9 +155,7 @@ function SignalRow({ signal }: { signal: AntiCheatSignal }) {
       </span>
       <span className="flex-1">
         {SIGNAL_LABELS[signal.type]}
-        {signal.detail ? (
-          <span className="ml-1 text-slate-500">· {signal.detail}</span>
-        ) : null}
+        {signal.detail ? <span className="ml-1 text-slate-500">· {signal.detail}</span> : null}
       </span>
       <span className="text-[10px] text-slate-400">
         {new Date(signal.timestamp).toLocaleTimeString()}

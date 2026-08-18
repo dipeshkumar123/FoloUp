@@ -1,0 +1,9 @@
+   ▲ Next.js 16.0.7 (webpack)
+   - Local:         http://localhost:3000
+   - Network:       http://192.168.0.211:3000
+   - Environments: .env
+
+ ✓ Starting...
+ ✓ Ready in 2.5s
+[INFO] LLM call ok: groq/openai/gpt-oss-120b 
+ GET /api/llm-health 200 in 2.7s (compile: 1642ms, proxy.ts: 217ms, render: 798ms)

@@ -35,6 +35,7 @@ import { useAntiCheat } from "@/components/enhanced/anti-cheat/useAntiCheat";
 import { FacePresenceCamera } from "@/components/enhanced/anti-cheat/FacePresenceCamera";
 import { AntiCheatMonitor } from "@/components/enhanced/anti-cheat/AntiCheatMonitor";
 import { FullscreenEnforcer } from "@/components/enhanced/anti-cheat/FullscreenEnforcer";
+import { ScreenshotWarning } from "@/components/enhanced/anti-cheat/ScreenshotWarning";
 import {
   VideoInterviewLayer,
   type VideoInterviewLayerHandle,
@@ -358,6 +359,11 @@ function Call({ interview }: InterviewProps) {
   return (
     <div className="flex justify-center items-center min-h-screen bg-gray-100">
       {isStarted && <TabSwitchWarning />}
+      {/* Visible screenshot warning — pops the moment a screenshot attempt
+          is detected, auto-dismisses after 4s */}
+      {isStarted && !isEnded && !isOldUser && (
+        <ScreenshotWarning signals={antiCheat.signals} />
+      )}
       <div className="bg-white rounded-md md:w-[80%] w-[90%]">
         {/* Enhanced anti-cheat + video layer — active only during the call */}
         {isStarted && !isEnded && !isOldUser && (

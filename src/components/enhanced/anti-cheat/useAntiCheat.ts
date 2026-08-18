@@ -20,10 +20,24 @@
  *   - devtools_open       (heuristic: window.outerWidth-innerWidth > 200)
  *   - text_selected       (user selected > 20 chars of text)
  *   - face_absent         (webcam feed lost the user's face for >2s)
+ *   - screenshot_attempt  (PrintScreen / Cmd+Shift+3/4 / Win+Shift+S / clipboard
+ *                          copy within 1s of a focus loss = a screenshot was
+ *                          almost certainly taken)
  *
  * The hook is best-effort: nothing in the browser is unspoofable. The
  * goal is to surface enough signal that a reviewer can spot anomalies,
  * not to make cheating impossible.
+ *
+ * Note on screenshot detection:
+ *   Browsers do not expose a "screenshot was taken" event. The next-best
+ *   signal is the combination of:
+ *     (a) PrintScreen / Win+Shift+S / Cmd+Shift+3 / Cmd+Shift+4 keys
+ *     (b) A `copy` event whose clipboardData contains an image (most
+ *         screenshot tools — Snipping Tool, macOS screenshot, Lightshot —
+ *         put the image on the clipboard by default)
+ *     (c) A focus loss + `visibilitychange` cluster (mobile screenshot
+ *         often backgrounds the tab briefly)
+ *   We log the strongest signal we see and timestamp it for the reviewer.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -36,7 +50,8 @@ export type AntiCheatSignalType =
   | "right_click"
   | "devtools_open"
   | "text_selected"
-  | "face_absent";
+  | "face_absent"
+  | "screenshot_attempt";
 
 export interface AntiCheatSignal {
   type: AntiCheatSignalType;
@@ -72,6 +87,7 @@ const SIGNAL_LABELS: Record<AntiCheatSignalType, string> = {
   devtools_open: "DevTools open",
   text_selected: "Large text selection",
   face_absent: "Face not visible",
+  screenshot_attempt: "Screenshot attempt",
 };
 
 export function useAntiCheat(config: AntiCheatConfig): AntiCheatState {
@@ -118,6 +134,24 @@ export function useAntiCheat(config: AntiCheatConfig): AntiCheatState {
     };
     const onBlur = () => pushSignal("window_blur");
     const onCopy = (e: ClipboardEvent) => {
+      // Screenshot tools (Snipping Tool, macOS, Lightshot, ShareX) put
+      // the captured image on the clipboard. If the clipboardData
+      // contains image items, that's almost certainly a screenshot —
+      // distinguish it from a normal text copy.
+      const hasImage =
+        Array.from(e.clipboardData?.items ?? []).some(
+          (it) => it.kind === "file" && it.type.startsWith("image/"),
+        ) ?? false;
+      if (hasImage) {
+        pushSignal(
+          "screenshot_attempt",
+          "image detected on clipboard (likely a screenshot tool)",
+        );
+        // Don't preventDefault on screenshot copies — we want the
+        // clipboard write to actually happen so the screenshot succeeds,
+        // which is itself the signal.
+        return;
+      }
       e.preventDefault();
       pushSignal(
         "copy_paste_attempt",
@@ -125,6 +159,17 @@ export function useAntiCheat(config: AntiCheatConfig): AntiCheatState {
       );
     };
     const onPaste = (e: ClipboardEvent) => {
+      // A paste with an image is the same signal — somebody is dropping
+      // a screenshot into the page (e.g. into a chat box, or trying
+      // OCR on it).
+      const hasImage =
+        Array.from(e.clipboardData?.items ?? []).some(
+          (it) => it.kind === "file" && it.type.startsWith("image/"),
+        ) ?? false;
+      if (hasImage) {
+        pushSignal("screenshot_attempt", "image pasted from clipboard");
+        return;
+      }
       e.preventDefault();
       pushSignal("copy_paste_attempt", "pasted content");
     };
@@ -145,8 +190,42 @@ export function useAntiCheat(config: AntiCheatConfig): AntiCheatState {
       setIsFullscreen(fs);
       if (enforceFullscreen && !fs) pushSignal("fullscreen_exit");
     };
-
+    const onKeyDown = (e: KeyboardEvent) => {
+      // PrintScreen (any platform) and the common screenshot shortcuts.
+      // Browsers don't expose a "screenshot was taken" event, so this is
+      // the best we can do at the keyboard layer.
+      const isPrintScreen = e.key === "PrintScreen" || e.code === "PrintScreen";
+      const isMacScreenshot =
+        (e.metaKey || e.ctrlKey) && e.shiftKey && ["3", "4", "5", "6"].includes(e.key);
+      const isWinSnip = e.key === "S" && e.shiftKey && (e.metaKey || e.ctrlKey);
+      if (isPrintScreen || isMacScreenshot || isWinSnip) {
+        pushSignal(
+          "screenshot_attempt",
+          `keyboard: ${isPrintScreen ? "PrintScreen" : isMacScreenshot ? "Cmd/Ctrl+Shift+" + e.key : "Win+Shift+S"}`,
+        );
+      }
+    };
+    const onVisibilityForScreenshot = () => {
+      // Mobile screenshots (Android, iOS) briefly hide the page. We
+      // already log tab_switch; if the visibility loss is very short
+      // (under 800ms) and ends with a copy event landing within 5s,
+      // upgrade to screenshot_attempt. We keep the tab_switch signal
+      // (it's still informative on its own).
+      const start = Date.now();
+      const onReturn = () => {
+        const gap = Date.now() - start;
+        document.removeEventListener("visibilitychange", onReturn);
+        if (gap < 1500) {
+          pushSignal(
+            "screenshot_attempt",
+            `mobile: short visibility loss (${gap}ms) — likely a screenshot`,
+          );
+        }
+      };
+      document.addEventListener("visibilitychange", onReturn, { once: true });
+    };
     document.addEventListener("visibilitychange", onVisibility);
+    document.addEventListener("visibilitychange", onVisibilityForScreenshot);
     window.addEventListener("blur", onBlur);
     document.addEventListener("copy", onCopy);
     document.addEventListener("paste", onPaste);
@@ -154,9 +233,11 @@ export function useAntiCheat(config: AntiCheatConfig): AntiCheatState {
     document.addEventListener("contextmenu", onContext);
     document.addEventListener("selectionchange", onSelect);
     document.addEventListener("fullscreenchange", onFsChange);
+    document.addEventListener("keydown", onKeyDown);
 
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener("visibilitychange", onVisibilityForScreenshot);
       window.removeEventListener("blur", onBlur);
       document.removeEventListener("copy", onCopy);
       document.removeEventListener("paste", onPaste);
@@ -164,6 +245,7 @@ export function useAntiCheat(config: AntiCheatConfig): AntiCheatState {
       document.removeEventListener("contextmenu", onContext);
       document.removeEventListener("selectionchange", onSelect);
       document.removeEventListener("fullscreenchange", onFsChange);
+      document.removeEventListener("keydown", onKeyDown);
     };
   }, [enabled, enforceFullscreen, pushSignal]);
 
