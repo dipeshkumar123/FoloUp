@@ -116,6 +116,37 @@ const updateResponse = async (payload: any, call_id: string) => {
   return data;
 };
 
+// ---------------------------------------------------------------------------
+// Enhanced suite helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Persist the full anti-cheat signal log + face-presence % at call-end.
+ * Both fields are write-only from the call page; the dashboard reads them
+ * back via `getAllResponses`.
+ */
+const saveIntegrity = async (
+  payload: {
+    integrity_signals: unknown[];
+    face_presence_pct: number;
+  },
+  callId: string,
+) => {
+  return saveResponse(payload as any, callId);
+};
+
+/**
+ * Attach a video storage path + public URL after the call ends.
+ * The actual upload is done client-side from the call page; this just
+ * updates the row.
+ */
+const saveVideoUrl = async (
+  payload: { video_url: string; video_storage_path: string },
+  callId: string,
+) => {
+  return saveResponse(payload as any, callId);
+};
+
 export const ResponseService = {
   createResponse,
   saveResponse,
@@ -125,4 +156,6 @@ export const ResponseService = {
   deleteResponse,
   getResponseCountByOrganizationId,
   getAllEmails: getAllEmailAddressesForInterview,
+  saveIntegrity,
+  saveVideoUrl,
 };

@@ -71,10 +71,15 @@ function QuestionsPopup({ interviewData, setProceed, setOpen }: Props) {
         interviewer_id: interviewData.interviewer_id.toString(),
         response_count: interviewData.response_count.toString(),
         logo_url: organization?.imageUrl || "",
+        organization_id: organization?.id || interviewData.organization_id || "",
+        user_id: user?.id || interviewData.user_id || "",
+        shareUrl: undefined,
       };
 
       const response = await axios.post("/api/create-interview", {
         organizationName: organization?.name,
+        organizationId: organization?.id,
+        userId: user?.id,
         interviewData: sanitizedInterviewData,
       });
       setIsClicked(false);

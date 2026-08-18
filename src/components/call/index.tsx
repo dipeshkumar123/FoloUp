@@ -17,6 +17,8 @@ import { isLightColor, testEmail } from "@/lib/utils";
 import { FeedbackService } from "@/services/feedback.service";
 import { InterviewerService } from "@/services/interviewers.service";
 import { ResponseService } from "@/services/responses.service";
+import { StorageService } from "@/services/storage.service";
+import { logger } from "@/lib/logger";
 import type { Interview } from "@/types/interview";
 import type { FeedbackData } from "@/types/response";
 import axios from "axios";
@@ -28,7 +30,15 @@ import { toast } from "sonner";
 import MiniLoader from "../loaders/mini-loader/miniLoader";
 import { Button } from "../ui/button";
 import { Card, CardHeader, CardTitle } from "../ui/card";
-import { TabSwitchWarning, useTabSwitchPrevention } from "./tabSwitchPrevention";
+import { TabSwitchWarning } from "./tabSwitchPrevention";
+import { useAntiCheat } from "@/components/enhanced/anti-cheat/useAntiCheat";
+import { FacePresenceCamera } from "@/components/enhanced/anti-cheat/FacePresenceCamera";
+import { AntiCheatMonitor } from "@/components/enhanced/anti-cheat/AntiCheatMonitor";
+import { FullscreenEnforcer } from "@/components/enhanced/anti-cheat/FullscreenEnforcer";
+import {
+  VideoInterviewLayer,
+  type VideoInterviewLayerHandle,
+} from "@/components/enhanced/video-interview/VideoInterviewLayer";
 
 const webClient = new RetellWebClient();
 
@@ -64,10 +74,21 @@ function Call({ interview }: InterviewProps) {
   const [isValidEmail, setIsValidEmail] = useState<boolean>(false);
   const [isOldUser, setIsOldUser] = useState<boolean>(false);
   const [callId, setCallId] = useState<string>("");
-  const { tabSwitchCount } = useTabSwitchPrevention();
+  // Enhanced anti-cheat: tracks 8 signal types (tab, blur, fullscreen exit,
+  // copy/paste, right-click, devtools, text selection, face-presence).
+  const antiCheat = useAntiCheat({
+    enabled: isCalling,
+    enforceFullscreen: true,
+    enableFacePresence: true,
+  });
+  const videoHandleRef = useRef<VideoInterviewLayerHandle | null>(null);
+  const [videoEnabled, setVideoEnabled] = useState<boolean>(true);
+  // The live camera stream owned by VideoInterviewLayer, shared with face
+  // detection so we don't open a second camera.
+  const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
   const [isFeedbackSubmitted, setIsFeedbackSubmitted] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [interviewerImg, setInterviewerImg] = useState("");
+  const [interviewerImg, setInterviewerImg] = useState("/interviewers/Lisa.png");
   const [interviewTimeDuration, setInterviewTimeDuration] = useState<string>("1");
   const [time, setTime] = useState(0);
   const [currentTimeDuration, setCurrentTimeDuration] = useState<string>("0");
@@ -186,6 +207,17 @@ function Call({ interview }: InterviewProps) {
   };
 
   const startConversation = async () => {
+    // Fullscreen must be requested within the user gesture — do it first,
+    // before any state update or await, so the browser grants it.
+    if (!document.fullscreenElement) {
+      try {
+        await document.documentElement.requestFullscreen();
+      } catch {
+        toast.error("Fullscreen is required to start this interview.");
+        return;
+      }
+    }
+
     const data = {
       mins: interview?.time_duration,
       objective: interview?.objective,
@@ -194,12 +226,18 @@ function Call({ interview }: InterviewProps) {
     };
     setLoading(true);
 
-    const oldUserEmails: string[] = (await ResponseService.getAllEmails(interview.id)).map(
-      (item) => item.email,
+    const normalizedEmail = email.trim().toLowerCase();
+    const oldUserEmails = (await ResponseService.getAllEmails(interview.id)).map((item) =>
+      String(item.email || "").trim().toLowerCase(),
     );
+    const allowedRespondents = (interview.respondents || []).map((respondent) =>
+      String(respondent).trim().toLowerCase(),
+    );
+    // An empty respondents list means the interview is open to everyone.
+    // It is not an allow-list that excludes every candidate.
     const OldUser =
-      oldUserEmails.includes(email) ||
-      (interview?.respondents && !interview?.respondents.includes(email));
+      oldUserEmails.includes(normalizedEmail) ||
+      (allowedRespondents.length > 0 && !allowedRespondents.includes(normalizedEmail));
 
     if (OldUser) {
       setIsOldUser(true);
@@ -241,8 +279,9 @@ function Call({ interview }: InterviewProps) {
 
   useEffect(() => {
     const fetchInterviewer = async () => {
+      if (interview.interviewer_id === null || interview.interviewer_id === undefined) return;
       const interviewer = await InterviewerService.getInterviewer(interview.interviewer_id);
-      setInterviewerImg(interviewer.image);
+      if (interviewer?.image) setInterviewerImg(interviewer.image);
     };
     fetchInterviewer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -251,14 +290,67 @@ function Call({ interview }: InterviewProps) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
   useEffect(() => {
     if (isEnded) {
-      const updateInterview = async () => {
-        await ResponseService.saveResponse(
-          { is_ended: true, tab_switch_count: tabSwitchCount },
-          callId,
-        );
+      const persistCallEnd = async () => {
+        // 1) Stop the video recorder and grab the blob
+        let videoBlob: Blob | null = null;
+        try {
+          const result = await videoHandleRef.current?.stop();
+          if (result) videoBlob = result.blob;
+        } catch (err) {
+          logger.error("Video stop failed: " + String(err));
+        }
+
+        // 2) Upload the video to Supabase Storage (best-effort)
+        let videoUrl: string | undefined;
+        let videoPath: string | undefined;
+        if (videoBlob && callId) {
+          try {
+            const upload = await StorageService.uploadInterviewVideo(
+              videoBlob,
+              callId,
+            );
+            videoUrl = upload.publicUrl;
+            videoPath = upload.storagePath;
+            logger.info(`Video uploaded: ${upload.publicUrl} (${upload.sizeBytes} bytes)`);
+          } catch (err) {
+            // Non-fatal — the call still completes without the recording.
+            logger.warn("Video upload failed: " + String(err));
+            toast.error("Couldn't upload the video recording", {
+              description: "The interview results are still saved — only the recording is missing.",
+            });
+          }
+        }
+
+        // 3) Persist integrity signals + face presence + (optional) video URL
+        try {
+          if (!callId) return;
+          await ResponseService.saveResponse(
+            {
+              is_ended: true,
+              duration: Number(currentTimeDuration) || null,
+              tab_switch_count: antiCheat.counts.tab_switch ?? 0,
+            },
+            callId,
+          );
+          await ResponseService.saveIntegrity(
+            {
+              integrity_signals: antiCheat.signals,
+              face_presence_pct: antiCheat.facePresencePct,
+            },
+            callId,
+          );
+          if (videoUrl && videoPath) {
+            await ResponseService.saveVideoUrl(
+              { video_url: videoUrl, video_storage_path: videoPath },
+              callId,
+            );
+          }
+        } catch (err) {
+          logger.error("Failed to save call-end payload: " + String(err));
+        }
       };
 
-      updateInterview();
+      persistCallEnd();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEnded]);
@@ -267,6 +359,48 @@ function Call({ interview }: InterviewProps) {
     <div className="flex justify-center items-center min-h-screen bg-gray-100">
       {isStarted && <TabSwitchWarning />}
       <div className="bg-white rounded-md md:w-[80%] w-[90%]">
+        {/* Enhanced anti-cheat + video layer — active only during the call */}
+        {isStarted && !isEnded && !isOldUser && (
+          <div className="absolute right-4 top-4 z-30 w-72 space-y-2">
+            {videoEnabled && (
+              <div className="h-40">
+                <VideoInterviewLayer
+                  active
+                  handleRef={videoHandleRef}
+                  compact
+                  className="h-full"
+                  onStreamReady={setVideoStream}
+                />
+              </div>
+            )}
+            {/* Face detection runs off-screen but must stay rendering — a
+                `display:none` (hidden) video never produces frames, which
+                would make face-presence always report "no face". It reuses
+                the VideoInterviewLayer's stream instead of a second camera. */}
+            <FacePresenceCamera
+              enabled={!!videoStream}
+              stream={videoStream}
+              compact
+              className="pointer-events-none absolute left-0 top-0 h-40 w-72 opacity-0"
+            />
+            <AntiCheatMonitor state={antiCheat} showLog={false} />
+            <FullscreenEnforcer active={isStarted && !isEnded && !isOldUser} />
+            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px]">
+              <span className="text-slate-600">Camera</span>
+              <button
+                type="button"
+                onClick={() => setVideoEnabled((v) => !v)}
+                className={`rounded-full px-2 py-0.5 font-medium ${
+                  videoEnabled
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-slate-200 text-slate-600"
+                }`}
+              >
+                {videoEnabled ? "On" : "Off"}
+              </button>
+            </div>
+          </div>
+        )}
         <Card className="h-[88vh] rounded-lg border-2 border-b-4 border-r-4 border-black text-xl font-bold transition-all  md:block dark:border-white ">
           <div>
             <div className="m-4 h-[15px] rounded-lg border-[1px]  border-black">
@@ -359,7 +493,7 @@ function Call({ interview }: InterviewProps) {
                     {!Loading ? "Start Interview" : <MiniLoader />}
                   </Button>
                   <AlertDialog>
-                    <AlertDialogTrigger>
+                    <AlertDialogTrigger asChild>
                       <Button
                         className="bg-white border ml-2 text-black min-w-15 h-10 rounded-lg flex flex-row justify-center mb-8"
                         style={{ borderColor: interview.theme_color }}
@@ -445,9 +579,9 @@ function Call({ interview }: InterviewProps) {
             {isStarted && !isEnded && !isOldUser && (
               <div className="items-center p-2">
                 <AlertDialog>
-                  <AlertDialogTrigger className="w-full">
+                  <AlertDialogTrigger asChild>
                     <Button
-                      className=" bg-white text-black border  border-indigo-600 h-10 mx-auto flex flex-row justify-center mb-8"
+                      className="w-full bg-white text-black border border-indigo-600 h-10 mx-auto flex flex-row justify-center mb-8"
                       disabled={Loading}
                     >
                       End Interview{" "}
@@ -495,15 +629,16 @@ function Call({ interview }: InterviewProps) {
 
                   {!isFeedbackSubmitted && (
                     <AlertDialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                      <AlertDialogTrigger className="w-full flex justify-center">
+                      <AlertDialogTrigger asChild>
                         <Button
-                          className="bg-indigo-600 text-white h-10 mt-4 mb-4"
+                          className="bg-indigo-600 text-white h-10 mt-4 mb-4 mx-auto flex"
                           onClick={() => setIsDialogOpen(true)}
                         >
                           Provide Feedback
                         </Button>
                       </AlertDialogTrigger>
                       <AlertDialogContent>
+                        <AlertDialogTitle className="sr-only">Provide feedback</AlertDialogTitle>
                         <FeedbackForm email={email} onSubmit={handleFeedbackSubmit} />
                       </AlertDialogContent>
                     </AlertDialog>

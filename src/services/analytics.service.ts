@@ -3,9 +3,9 @@
 import { SYSTEM_PROMPT, getInterviewAnalyticsPrompt } from "@/lib/prompts/analytics";
 import { InterviewService } from "@/services/interviews.service";
 import { ResponseService } from "@/services/responses.service";
+import { chatJson } from "@/lib/llm";
 import type { Question } from "@/types/interview";
 import type { Analytics } from "@/types/response";
-import { OpenAI } from "openai";
 
 export const generateInterviewAnalytics = async (payload: {
   callId: string;
@@ -28,39 +28,23 @@ export const generateInterviewAnalytics = async (payload: {
       .map((q: Question, index: number) => `${index + 1}. ${q.question}`)
       .join("\n");
 
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-      maxRetries: 5,
-      dangerouslyAllowBrowser: true,
-    });
-
     const prompt = getInterviewAnalyticsPrompt(interviewTranscript, mainInterviewQuestions);
 
-    const baseCompletion = await openai.chat.completions.create({
-      model: "gpt-4o",
+    const { data: analyticsResponse } = await chatJson<Record<string, unknown>>({
       messages: [
-        {
-          role: "system",
-          content: SYSTEM_PROMPT,
-        },
-        {
-          role: "user",
-          content: prompt,
-        },
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: prompt },
       ],
-      response_format: { type: "json_object" },
+      // analytics is a bigger JSON payload than the others
+      maxTokens: 4000,
     });
 
-    const basePromptOutput = baseCompletion.choices[0] || {};
-    const content = basePromptOutput.message?.content || "";
-    const analyticsResponse = JSON.parse(content);
-
-    analyticsResponse.mainInterviewQuestions = questions.map((q: Question) => q.question);
+    (analyticsResponse as { mainInterviewQuestions?: string[] }).mainInterviewQuestions =
+      questions.map((q: Question) => q.question);
 
     return { analytics: analyticsResponse, status: 200 };
   } catch (error) {
-    console.error("Error in OpenAI request:", error);
-
+    console.error("Error in LLM analytics request:", error);
     return { error: "internal server error", status: 500 };
   }
 };

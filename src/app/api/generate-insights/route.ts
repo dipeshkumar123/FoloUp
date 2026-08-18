@@ -2,8 +2,8 @@ import { logger } from "@/lib/logger";
 import { SYSTEM_PROMPT, createUserPrompt } from "@/lib/prompts/generate-insights";
 import { InterviewService } from "@/services/interviews.service";
 import { ResponseService } from "@/services/responses.service";
+import { chatJson } from "@/lib/llm";
 import { NextResponse } from "next/server";
-import { OpenAI } from "openai";
 
 export async function POST(req: Request) {
   logger.info("generate-insights request received");
@@ -19,12 +19,6 @@ export async function POST(req: Request) {
     }
   }
 
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-    maxRetries: 5,
-    dangerouslyAllowBrowser: true,
-  });
-
   try {
     const prompt = createUserPrompt(
       callSummaries,
@@ -33,41 +27,30 @@ export async function POST(req: Request) {
       interview.description,
     );
 
-    const baseCompletion = await openai.chat.completions.create({
-      model: "gpt-4o",
+    const { data, raw, backend, model } = await chatJson<{ insights: string[] }>({
       messages: [
-        {
-          role: "system",
-          content: SYSTEM_PROMPT,
-        },
-        {
-          role: "user",
-          content: prompt,
-        },
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: prompt },
       ],
-      response_format: { type: "json_object" },
     });
 
-    const basePromptOutput = baseCompletion.choices[0] || {};
-    const content = basePromptOutput.message?.content || "";
-    const insightsResponse = JSON.parse(content);
-
     await InterviewService.updateInterview(
-      { insights: insightsResponse.insights },
+      { insights: data.insights },
       body.interviewId,
     );
 
-    logger.info("Insights generated successfully");
+    logger.info(`Insights generated via ${backend}/${model}`);
 
     return NextResponse.json(
       {
-        response: content,
+        response: raw,
+        backend,
+        model,
       },
       { status: 200 },
     );
   } catch (error) {
     logger.error("Error generating insights");
-
     return NextResponse.json({ error: "internal server error" }, { status: 500 });
   }
 }

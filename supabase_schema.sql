@@ -71,7 +71,20 @@ CREATE TABLE response (
     is_analysed BOOLEAN DEFAULT false,
     is_ended BOOLEAN DEFAULT false,
     is_viewed BOOLEAN DEFAULT false,
-    tab_switch_count INTEGER
+    tab_switch_count INTEGER,
+
+    -- -----------------------------------------------------------------
+    -- Enhanced suite additions
+    -- -----------------------------------------------------------------
+    -- Full anti-cheat signal log (one entry per fired signal). Each
+    -- entry is a JSONB object: { type, timestamp, detail? }.
+    integrity_signals JSONB DEFAULT '[]'::jsonb,
+    -- Rolling face-presence percentage (0..100) over the call window.
+    face_presence_pct INTEGER,
+    -- Public URL of the uploaded video recording (Supabase Storage).
+    video_url TEXT,
+    -- Path inside the Storage bucket, useful for deletion/cleanup.
+    video_storage_path TEXT
 );
 
 CREATE TABLE feedback (
@@ -82,3 +95,34 @@ CREATE TABLE feedback (
     feedback TEXT,
     satisfaction INTEGER
 );
+
+-- ---------------------------------------------------------------------------
+-- Storage bucket for interview video recordings.
+-- Run this once in the Supabase SQL editor after the table migration.
+--
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('interview-videos', 'interview-videos', true)
+ON CONFLICT (id) DO NOTHING;
+--
+-- Public read is required because the feedback dashboard plays back the
+-- video via a plain <video src=…> tag. Writes are still gated by RLS.
+-- Candidate calls are public, so recordings use the Supabase anonymous key.
+-- These policies grant access only to the dedicated recordings bucket.
+CREATE POLICY "Public read interview videos"
+ON storage.objects FOR SELECT TO anon
+USING (bucket_id = 'interview-videos');
+
+CREATE POLICY "Public upload interview videos"
+ON storage.objects FOR INSERT TO anon
+WITH CHECK (bucket_id = 'interview-videos');
+
+CREATE POLICY "Public update interview videos"
+ON storage.objects FOR UPDATE TO anon
+USING (bucket_id = 'interview-videos')
+WITH CHECK (bucket_id = 'interview-videos');
+
+CREATE POLICY "Public delete interview videos"
+ON storage.objects FOR DELETE TO anon
+USING (bucket_id = 'interview-videos');
+
+-- ---------------------------------------------------------------------------
