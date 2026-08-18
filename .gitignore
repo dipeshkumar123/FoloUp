@@ -20,6 +20,11 @@
 .DS_Store
 *.pem
 
+# assessment delivery / internal docs
+VIDEO_STORYBOARD.md
+DELIVERY.md
+ENHANCED_README.md
+
 # debug
 npm-debug.log*
 yarn-debug.log*

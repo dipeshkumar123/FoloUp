@@ -20,9 +20,9 @@
  *   - Always review flagged sessions manually before acting.
  */
 
-import { useEffect, useRef, useState } from "react";
-import { Camera, CameraOff, ShieldAlert, ShieldCheck } from "lucide-react";
 import { cn } from "@/components/enhanced/shared/cn";
+import { Camera, CameraOff, ShieldAlert, ShieldCheck } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 declare global {
   interface Window {
@@ -43,6 +43,12 @@ interface FacePresenceCameraProps {
   pollMs?: number;
   /** Compact mode — used inside the corner video tile. */
   compact?: boolean;
+  /**
+   * A pre-acquired camera stream to analyse. When provided, the component
+   * reuses it instead of calling getUserMedia again — this avoids opening a
+   * second camera when the VideoInterviewLayer already owns one.
+   */
+  stream?: MediaStream | null;
 }
 
 export function FacePresenceCamera({
@@ -50,6 +56,7 @@ export function FacePresenceCamera({
   className,
   pollMs = 700,
   compact = false,
+  stream: streamProp,
 }: FacePresenceCameraProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -57,12 +64,19 @@ export function FacePresenceCamera({
   const [hasFace, setHasFace] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Acquire / release the camera when `enabled` flips
+  // Acquire / release the camera when `enabled` flips. When a shared
+  // `stream` is provided (from the VideoInterviewLayer) we reuse it instead
+  // of opening a second camera.
   useEffect(() => {
     if (!enabled) {
       const tracks = videoRef.current?.srcObject as MediaStream | null;
-      tracks?.getTracks().forEach((t) => t.stop());
-      if (videoRef.current) videoRef.current.srcObject = null;
+      // Only stop tracks we own — a shared stream is owned by the caller.
+      if (!streamProp && tracks) {
+        for (const t of tracks.getTracks()) t.stop();
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
       setHasStream(false);
       setHasFace(true);
       window.__antiCheatSetFacePresent?.(true);
@@ -71,12 +85,16 @@ export function FacePresenceCamera({
     let cancelled = false;
     (async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 320, height: 240, facingMode: "user" },
-          audio: false,
-        });
+        const stream =
+          streamProp ??
+          (await navigator.mediaDevices.getUserMedia({
+            video: { width: 320, height: 240, facingMode: "user" },
+            audio: false,
+          }));
         if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
+          if (!streamProp) {
+            for (const t of stream.getTracks()) t.stop();
+          }
           return;
         }
         if (videoRef.current) {
@@ -97,7 +115,7 @@ export function FacePresenceCamera({
     return () => {
       cancelled = true;
     };
-  }, [enabled]);
+  }, [enabled, streamProp]);
 
   // Polling loop — analyse the current frame
   useEffect(() => {

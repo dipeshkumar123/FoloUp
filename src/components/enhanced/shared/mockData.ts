@@ -676,9 +676,17 @@ export function computeMockDashboardFromResponses(
 
   const integrityFlags = rows.filter((r) => {
     const tabs = num((r as any).tabSwitchCount ?? r.tab_switch_count);
-    const face = num((r as any).facePresencePct ?? r.face_presence_pct);
+    const faceRaw = (r as any).facePresencePct ?? r.face_presence_pct;
+    const face = num(faceRaw);
+    // Only treat a low face-presence as a flag when we actually have data —
+    // real responses created before the enhanced suite have no face_presence_pct.
+    const hasFaceData = faceRaw !== undefined && faceRaw !== null;
     const signals = (r as any).integrity_signals;
-    return tabs >= 3 || face < 80 || (Array.isArray(signals) && signals.length > 0);
+    return (
+      tabs >= 3 ||
+      (hasFaceData && face < 80) ||
+      (Array.isArray(signals) && signals.length > 0)
+    );
   }).length;
 
   // Reference the function so eslint doesn't strip the import

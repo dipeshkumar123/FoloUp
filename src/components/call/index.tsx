@@ -34,6 +34,7 @@ import { TabSwitchWarning } from "./tabSwitchPrevention";
 import { useAntiCheat } from "@/components/enhanced/anti-cheat/useAntiCheat";
 import { FacePresenceCamera } from "@/components/enhanced/anti-cheat/FacePresenceCamera";
 import { AntiCheatMonitor } from "@/components/enhanced/anti-cheat/AntiCheatMonitor";
+import { FullscreenEnforcer } from "@/components/enhanced/anti-cheat/FullscreenEnforcer";
 import {
   VideoInterviewLayer,
   type VideoInterviewLayerHandle,
@@ -82,6 +83,9 @@ function Call({ interview }: InterviewProps) {
   });
   const videoHandleRef = useRef<VideoInterviewLayerHandle | null>(null);
   const [videoEnabled, setVideoEnabled] = useState<boolean>(true);
+  // The live camera stream owned by VideoInterviewLayer, shared with face
+  // detection so we don't open a second camera.
+  const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
   const [isFeedbackSubmitted, setIsFeedbackSubmitted] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [interviewerImg, setInterviewerImg] = useState("/interviewers/Lisa.png");
@@ -203,6 +207,17 @@ function Call({ interview }: InterviewProps) {
   };
 
   const startConversation = async () => {
+    // Fullscreen must be requested within the user gesture — do it first,
+    // before any state update or await, so the browser grants it.
+    if (!document.fullscreenElement) {
+      try {
+        await document.documentElement.requestFullscreen();
+      } catch {
+        toast.error("Fullscreen is required to start this interview.");
+        return;
+      }
+    }
+
     const data = {
       mins: interview?.time_duration,
       objective: interview?.objective,
@@ -210,18 +225,6 @@ function Call({ interview }: InterviewProps) {
       name: name || "not provided",
     };
     setLoading(true);
-
-    // This call runs directly from the Start button's user gesture, which is
-    // required by browsers before they allow fullscreen mode.
-    if (!document.fullscreenElement) {
-      try {
-        await document.documentElement.requestFullscreen();
-      } catch {
-        toast.error("Fullscreen is required to start this interview.");
-        setLoading(false);
-        return;
-      }
-    }
 
     const normalizedEmail = email.trim().toLowerCase();
     const oldUserEmails = (await ResponseService.getAllEmails(interview.id)).map((item) =>
@@ -366,11 +369,22 @@ function Call({ interview }: InterviewProps) {
                   handleRef={videoHandleRef}
                   compact
                   className="h-full"
+                  onStreamReady={setVideoStream}
                 />
               </div>
             )}
-            <FacePresenceCamera enabled compact className="hidden" />
+            {/* Face detection runs off-screen but must stay rendering — a
+                `display:none` (hidden) video never produces frames, which
+                would make face-presence always report "no face". It reuses
+                the VideoInterviewLayer's stream instead of a second camera. */}
+            <FacePresenceCamera
+              enabled={!!videoStream}
+              stream={videoStream}
+              compact
+              className="pointer-events-none absolute left-0 top-0 h-40 w-72 opacity-0"
+            />
             <AntiCheatMonitor state={antiCheat} showLog={false} />
+            <FullscreenEnforcer active={isStarted && !isEnded && !isOldUser} />
             <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px]">
               <span className="text-slate-600">Camera</span>
               <button

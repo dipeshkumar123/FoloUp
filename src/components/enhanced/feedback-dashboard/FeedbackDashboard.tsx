@@ -726,7 +726,7 @@ function SummaryTab({ response }: { response: MockResponse }) {
             <div className="text-center">
               <Video className="mx-auto h-8 w-8 text-slate-400" />
               <p className="mt-2 text-[10px]">
-                Video placeholder · {formatDuration(response.duration)} · {response.face_presence_pct}% face presence
+                Video placeholder · {formatDuration(response.duration)} · {response.face_presence_pct ?? 100}% face presence
               </p>
             </div>
           </div>
@@ -793,7 +793,7 @@ function TranscriptTab({ response }: { response: MockResponse }) {
 }
 
 function IntegrityTab({ response }: { response: MockResponse }) {
-  const facePct = response.face_presence_pct;
+  const facePct = response.face_presence_pct ?? 100;
   return (
     <div className="space-y-3 text-xs">
       <div className="grid grid-cols-3 gap-2">
@@ -855,7 +855,7 @@ function IntegrityTab({ response }: { response: MockResponse }) {
 function hasIntegrityFlag(response: MockResponse) {
   return (
     response.tab_switch_count >= 3 ||
-    response.face_presence_pct < 80 ||
+    (response.face_presence_pct ?? 100) < 80 ||
     (response.integrity_signals?.length ?? 0) > 0
   );
 }

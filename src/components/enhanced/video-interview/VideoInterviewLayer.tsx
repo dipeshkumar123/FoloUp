@@ -43,6 +43,9 @@ export interface VideoInterviewLayerHandle {
   recordingUrl: string | null;
   isRecording: boolean;
   hasPermission: boolean;
+  /** The live camera stream, so other consumers (e.g. face detection) can
+      share it instead of requesting a second getUserMedia. */
+  stream: MediaStream | null;
 }
 
 interface VideoInterviewLayerProps {
@@ -59,6 +62,10 @@ interface VideoInterviewLayerProps {
   handleRef?: React.MutableRefObject<VideoInterviewLayerHandle | null>;
   /** Compact mode — used inside the in-call tile. */
   compact?: boolean;
+  /** Called whenever the camera stream is acquired or released. Lets the
+      parent share the same stream with face detection instead of opening a
+      second camera. */
+  onStreamReady?: (stream: MediaStream | null) => void;
 }
 
 export function VideoInterviewLayer({
@@ -68,6 +75,7 @@ export function VideoInterviewLayer({
   onRecordingComplete,
   handleRef,
   compact = false,
+  onStreamReady,
 }: VideoInterviewLayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -88,6 +96,7 @@ export function VideoInterviewLayer({
       stream?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
       if (videoRef.current) videoRef.current.srcObject = null;
+      onStreamReady?.(null);
       return;
     }
     let cancelled = false;
@@ -102,6 +111,7 @@ export function VideoInterviewLayer({
           return;
         }
         streamRef.current = stream;
+        onStreamReady?.(stream);
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play().catch(() => undefined);
@@ -151,6 +161,7 @@ export function VideoInterviewLayer({
             : "Could not access the camera. Please grant permission.",
         );
         setHasPermission(false);
+        onStreamReady?.(null);
       }
     })();
     return () => {
@@ -158,8 +169,9 @@ export function VideoInterviewLayer({
       if (recorderRef.current?.state === "recording") recorderRef.current.stop();
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
+      onStreamReady?.(null);
     };
-  }, [active, onRecordingComplete]);
+  }, [active, onRecordingComplete, onStreamReady]);
 
   // Elapsed-time ticker
   useEffect(() => {
@@ -179,6 +191,7 @@ export function VideoInterviewLayer({
       isRecording,
       recordingUrl,
       hasPermission,
+      stream: streamRef.current,
       stop: async () => {
         if (!recorderRef.current) return null;
         if (recorderRef.current.state !== "inactive") {
